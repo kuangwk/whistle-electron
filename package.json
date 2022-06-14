@@ -21,7 +21,9 @@
   "dependencies": {
     "electron-prompt": "^1.7.0",
     "electron-squirrel-startup": "^1.0.0",
-    "fix-path": "^3.0.0"
+    "fix-path": "^3.0.0",
+    "ip": "^2.0.0",
+    "whistle": "^2.9.22"
   },
   "config": {
     "forge": {

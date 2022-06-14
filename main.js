@@ -1,14 +1,68 @@
-const { app, BrowserWindow, Menu } = require('electron')
+const { app, BrowserWindow, Menu, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const prompt = require('electron-prompt')
-const fixPath = require('fix-path');
+const fixPath = require('fix-path')
+const ip = require('ip')
+
+const defaultMenu = require('./default-menu')
 
 const iconPath = path.join(__dirname, 'assets/whistle.png')
 
 const DEFAULT_PORT = 8899
 
 const isMac = process.platform === 'darwin'
+
+class Setting {
+
+  constructor(name, defaultValue = '') {
+    this.name = name
+    this.defaultValue = defaultValue
+    this.value = this.getLocalValue()
+  }
+
+  getLocalValue() {
+    const localPath = this.getUserSettingPath()
+    let localValue = this.defaultValue
+    try {
+      localValue = fs.readFileSync(localPath, 'utf8') || this.defaultValue
+    } catch (err) {
+      console.error(err)
+    }
+    return localValue
+  }
+
+  getValue() {
+    return this.value
+  }
+
+  setValue(value, successCallback) {
+    const localPath = this.getUserSettingPath()
+    try {
+      fs.writeFileSync(localPath, value, 'utf8')
+      this.value = value
+      successCallback()
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  getUserSettingPath(dataPath) {
+    const userPath = app.getPath('userData')
+    return path.join(userPath, this.name)
+  }
+}
+
+const portSetting = new Setting('port', DEFAULT_PORT)
+const whistleLocationSetting = new Setting('whistle', 'local')
+
+function getPort() {
+  return portSetting.getValue()
+}
+
+const whistleIsGlobal = whistleLocationSetting.getValue() === 'global'
+
+const whistleCmd = whistleIsGlobal ? 'w2' : path.resolve(__dirname, './node_modules/whistle/bin/whistle.js')
 
 let win
 const createWindow = () => {
@@ -18,45 +72,24 @@ const createWindow = () => {
   win = new BrowserWindow({
     width: 1280,
     height: 960,
-    icon: iconPath
+    icon: iconPath,
+    title: `Whistle@${ip.address()}:${portSetting.getValue()}`,
+  })
+
+  win.on('page-title-updated', e => {
+    e.preventDefault()
   })
 
   if (isMac) {
-    app.dock.setIcon(iconPath);
+    app.dock.setIcon(iconPath)
   }
 
   const port = getPort()
-  console.log('whistle port: ', port);
+  console.log('whistle port: ', port)
   win.loadURL(`http://127.0.0.1:${port}`)
 
 }
 
-function getPortPath() {
-  const userPath = app.getPath('userData')
-  return path.join(userPath, 'port');
-}
-
-let cachePort;
-function getPort() {
-  // return DEFAULT_PORT
-  if (cachePort) {
-    return cachePort
-  }
-  const portPath = getPortPath()
-  try {
-    cachePort = fs.readFileSync(portPath, 'utf8')
-  } catch (e) {
-    console.log('no user data file')
-  }
-  return cachePort || DEFAULT_PORT
-}
-
-function setPort(port) {
-  console.log('setPort: ', port);
-  const portPath = getPortPath()
-  fs.writeFileSync(portPath, port, 'utf8')
-  cachePort = port
-}
 
 function promptSetPort() {
   prompt({
@@ -68,25 +101,42 @@ function promptSetPort() {
     },
     type: 'input'
   })
-  .then((r) => {
-      if(r === null) {
-          console.log('user cancelled');
+  .then(port => {
+      if(port === null) {
+          console.log('user cancelled')
       } else {
-        console.log('设置端口号', r);
-        setPort(r)
-        startWhistleAndCreateWindow()
+        console.log('设置端口号', port)
+        portSetting.setValue(port, () => {
+          startWhistleAndCreateWindow()
+        })
       }
   })
-  .catch(console.error);
+  .catch(console.error)
+}
+
+function setWhistleLocation() {
+  const result = dialog.showMessageBoxSync(win, {
+    title: '提示',
+    buttons: ['确定', '取消'],
+    message: whistleIsGlobal ? `确定使用内置的 whistle 版本?` : '确定使用全局的 whistle？\n 请确认已全局安装 whistle(npm i -g whistle)',
+    icon: iconPath
+  })
+  console.log('result: ', result)
+  if (result === 0) {
+    whistleLocationSetting.setValue(whistleIsGlobal ? 'local' : 'global', () => {
+      app.relaunch()
+      app.exit(0)
+    })
+  }
 }
 
 function runCmd(cmd, successCallback) {
-  console.log('runCmd: ', cmd);
+  console.log('runCmd: ', cmd)
   const exec = require('child_process').exec
   exec(cmd, (err, stdout, stderr) => {
     if (err) {
       console.error(`run cmd error: ${cmd}`, err)
-      throw process.env.PATH;
+      throw err
     } else {
       console.log(`run cmd success: ${cmd}`)
       console.log(stdout)
@@ -97,21 +147,19 @@ function runCmd(cmd, successCallback) {
 
 function setMenu() {
   const template = [
-    ...(isMac ? [{
-      label: app.name,
-      submenu: [
-        { role: 'about' },
-        { type: 'separator' },
-        { role: 'quit' }
-      ]
-    }] : []),
+  ...defaultMenu,
   {
     label: 'whistle 设置',
     submenu: [{
-      label: '设置端口号',
+      label: `设置端口号${getPort()}`,
       click: () => {
         promptSetPort()
       }
+    }, {
+      label: !whistleIsGlobal ? '使用全局 whistle' : '使用内置 whistle',
+      click: () => {
+        setWhistleLocation()
+      },
     }, {
       label: '在浏览器中打开',
       click: async () => {
@@ -141,15 +189,24 @@ function setMenu() {
 
 function startWhistleAndCreateWindow() {
   const port = getPort()
-  console.log('port: ', port);
-  runCmd(`w2 restart -p ${port}`, () => {
+  console.log('port: ', port)
+  // npx 运行本地 whistle
+  runCmd(`${whistleCmd} restart -p ${port}`, () => {
     createWindow()
+  })
+}
+
+function logSettings() {
+  console.log('Settings:', {
+    port: getPort(),
+    whistleIsGlobal: whistleIsGlobal,
   })
 }
 
 app.whenReady().then(() => {
   // 修复 node 路径
-  fixPath();
+  logSettings()
+  fixPath()
   setMenu()
   startWhistleAndCreateWindow()
   app.on('activate', () => {
@@ -164,6 +221,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
-  runCmd('w2 stop')
   console.log('will-quit')
+  runCmd(`${whistleCmd} stop`)
 })
