@@ -56,8 +56,8 @@ class Setting {
   }
 }
 
-const portSetting = new Setting('port', DEFAULT_WHISTLE_LOCATION)
-const whistleLocationSetting = new Setting('whistle', 'local')
+const portSetting = new Setting('port', DEFAULT_PORT)
+const whistleLocationSetting = new Setting('whistle', DEFAULT_WHISTLE_LOCATION)
 
 function getPort() {
   return portSetting.getValue()
